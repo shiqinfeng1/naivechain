@@ -6,7 +6,7 @@ ADD By sqf:
 
 ### Build And Run
 
-- Download and compile **go get -v github.com/kofj/naivechain**
+- Download and compile **go get -v github.com/shiqinfeng1/naivechain**
 
 - Start First Node
 
