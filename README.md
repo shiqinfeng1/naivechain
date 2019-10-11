@@ -1,5 +1,8 @@
 # naivechain
 A naive and simple implementation of blockchains.
+ADD By sqf:
+1. 支持交易merkle树
+1. 支持变色龙hash
 
 ### Build And Run
 
