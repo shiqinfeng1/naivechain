@@ -1,11 +1,12 @@
-package tools
+package utiles
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
-	"json"
 )
 
+//Indent  缩进序列化
 func Indent(b []byte) string {
 	var out bytes.Buffer
 	err := json.Indent(&out, b, "", "    ")

@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/shiqinfeng1/naivechain/tools"
+	"github.com/shiqinfeng1/naivechain/utiles"
 
 	"golang.org/x/net/websocket"
 )
@@ -155,7 +155,7 @@ func wsHandleP2P(ws *websocket.Conn) {
 			log.Println("Can't receive p2p msg from ", peer, err.Error())
 			break
 		}
-		msgStr := tools.Indent(msg)
+		msgStr := utiles.Indent(msg)
 		log.Printf("Received[from %s]: %s.\n<<0:queryLatest 1:queryAll 2:responseBlockchain>>\n", peer, msgStr)
 		err = json.Unmarshal(msg, v)
 		errFatal("invalid p2p msg", err)
@@ -165,7 +165,7 @@ func wsHandleP2P(ws *websocket.Conn) {
 			v.Type = responseBlockchain
 
 			bs := responseLatestMsg()
-			bsStr := tools.Indent(bs)
+			bsStr := utiles.Indent(bs)
 			log.Printf("responseLatestMsg: %s\n", bsStr)
 			ws.Write(bs)
 
@@ -174,7 +174,7 @@ func wsHandleP2P(ws *websocket.Conn) {
 			v.Type = responseBlockchain
 			v.Data = string(d)
 			bs, _ := json.MarshalIndent(v, "", "    ")
-			bsStr := tools.Indent(bs)
+			bsStr := utiles.Indent(bs)
 			log.Printf("responseChainMsg: %s\n", bsStr)
 			ws.Write(bs)
 
