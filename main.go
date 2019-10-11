@@ -12,6 +12,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/shiqinfeng1/naivechain/tools"
+
 	"golang.org/x/net/websocket"
 )
 
@@ -87,7 +89,7 @@ func initConnection(ws *websocket.Conn) {
 }
 
 func handleBlocks(w http.ResponseWriter, r *http.Request) {
-	bs, _ := json.Marshal(blockchain)
+	bs, _ := json.MarshalIndent(blockchain, "", "    ")
 	w.Write(bs)
 }
 func handleMineBlock(w http.ResponseWriter, r *http.Request) {
@@ -116,7 +118,7 @@ func handlePeers(w http.ResponseWriter, r *http.Request) {
 			slice = append(slice, socket.Request().RemoteAddr)
 		}
 	}
-	bs, _ := json.Marshal(slice)
+	bs, _ := json.MarshalIndent(slice, "", "    ")
 	w.Write(bs)
 }
 func handleAddPeer(w http.ResponseWriter, r *http.Request) {
@@ -153,8 +155,8 @@ func wsHandleP2P(ws *websocket.Conn) {
 			log.Println("Can't receive p2p msg from ", peer, err.Error())
 			break
 		}
-
-		log.Printf("Received[from %s]: %s.\n", peer, msg)
+		msgStr := tools.Indent(msg)
+		log.Printf("Received[from %s]: %s.\n<<0:queryLatest 1:queryAll 2:responseBlockchain>>\n", peer, msgStr)
 		err = json.Unmarshal(msg, v)
 		errFatal("invalid p2p msg", err)
 
@@ -163,15 +165,17 @@ func wsHandleP2P(ws *websocket.Conn) {
 			v.Type = responseBlockchain
 
 			bs := responseLatestMsg()
-			log.Printf("responseLatestMsg: %s\n", bs)
+			bsStr := tools.Indent(bs)
+			log.Printf("responseLatestMsg: %s\n", bsStr)
 			ws.Write(bs)
 
 		case queryAll:
-			d, _ := json.Marshal(blockchain)
+			d, _ := json.MarshalIndent(blockchain, "", "    ")
 			v.Type = responseBlockchain
 			v.Data = string(d)
-			bs, _ := json.Marshal(v)
-			log.Printf("responseChainMsg: %s\n", bs)
+			bs, _ := json.MarshalIndent(v, "", "    ")
+			bsStr := tools.Indent(bs)
+			log.Printf("responseChainMsg: %s\n", bsStr)
 			ws.Write(bs)
 
 		case responseBlockchain:
