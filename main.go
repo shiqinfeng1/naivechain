@@ -9,57 +9,38 @@ import (
 	"log"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/shiqinfeng1/naivechain/utiles"
-
 	"golang.org/x/net/websocket"
 )
-
-const (
-	queryLatest = iota
-	queryAll
-	responseBlockchain
-)
-
-var genesisBlock = &Block{
-	Index:        0,
-	PreviousHash: "0",
-	Timestamp:    1465154705,
-	Data:         "my genesis block!!",
-	Hash:         "816534932c2b7154836da6afc367695e6337db8a921823784c14378abed4f7d7",
-}
 
 var (
 	sockets      []*websocket.Conn
 	blockchain   = []*Block{genesisBlock}
-	httpAddr     = flag.String("api", ":3001", "api server address.")
-	p2pAddr      = flag.String("p2p", ":6001", "p2p server address.")
-	initialPeers = flag.String("peers", "ws://localhost:6001", "initial peers")
+	txnPool      []*Transaction
+	pubKeys      = make(map[int]map[string]string)
+	superNode    = flag.Bool("supernode", false, "super node.")
+	nodeName     = flag.String("nodename", "no name", "node name.")
+	httpAddr     = flag.String("api", "", "api server address.")
+	p2pAddr      = flag.String("p2p", "", "p2p server address.")
+	initialPeers = flag.String("peers", "", "initial peers")
+	interval     = flag.String("interval", "60", "interval of mining block time.")
 )
 
-type Block struct {
-	Index        int64  `json:"index"`
-	PreviousHash string `json:"previousHash"`
-	Timestamp    int64  `json:"timestamp"`
-	Data         string `json:"data"`
-	Hash         string `json:"hash"`
-}
-
-func (b *Block) String() string {
-	return fmt.Sprintf("index: %d,previousHash:%s,timestamp:%d,data:%s,hash:%s", b.Index, b.PreviousHash, b.Timestamp, b.Data, b.Hash)
-}
-
-type ByIndex []*Block
-
-func (b ByIndex) Len() int           { return len(b) }
-func (b ByIndex) Swap(i, j int)      { b[i], b[j] = b[j], b[i] }
-func (b ByIndex) Less(i, j int) bool { return b[i].Index < b[j].Index }
-
+//ResponseBlockchain 节点交互通用数据结构
 type ResponseBlockchain struct {
-	Type int    `json:"type"`
+	Type string `json:"type"`
 	Data string `json:"data"`
+}
+
+//PubKey PubKey
+type PubKey struct {
+	NodeName string `json:"nodeName"`
+	Stage    int    `json:"stage"`
+	PubKey   string `json:"pubkey"`
 }
 
 func errFatal(msg string, err error) {
@@ -92,22 +73,28 @@ func handleBlocks(w http.ResponseWriter, r *http.Request) {
 	bs, _ := json.MarshalIndent(blockchain, "", "    ")
 	w.Write(bs)
 }
-func handleMineBlock(w http.ResponseWriter, r *http.Request) {
-	var v struct {
-		Data string `json:"data"`
-	}
-	decoder := json.NewDecoder(r.Body)
-	defer r.Body.Close()
-	err := decoder.Decode(&v)
-	if err != nil {
-		w.WriteHeader(http.StatusGone)
-		log.Println("[API] invalid block data : ", err.Error())
-		w.Write([]byte("invalid block data. " + err.Error() + "\n"))
-		return
-	}
-	block := generateNextBlock(v.Data)
+func handlePendings(w http.ResponseWriter, r *http.Request) {
+	bs, _ := json.MarshalIndent(txnPool, "", "    ")
+	w.Write(bs)
+}
+func handleMineBlock() {
+	block := generateNextBlock(*nodeName)
 	addBlock(block)
 	broadcast(responseLatestMsg())
+}
+func handleTransaction(w http.ResponseWriter, r *http.Request) {
+	var txn Transaction
+	decoder := json.NewDecoder(r.Body)
+	defer r.Body.Close()
+	err := decoder.Decode(&txn)
+	if err != nil {
+		w.WriteHeader(http.StatusGone)
+		log.Println("[API] invalid transaction data : ", err.Error())
+		w.Write([]byte("invalid transaction data. " + err.Error() + "\n"))
+		return
+	}
+	addTransaction(&txn)
+	broadcast(newTransactionMsg(txn))
 }
 func handlePeers(w http.ResponseWriter, r *http.Request) {
 	var slice []string
@@ -134,7 +121,7 @@ func handleAddPeer(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("invalid peer data. " + err.Error()))
 		return
 	}
-	connectToPeers([]string{v.Peer})
+	connectToPeers(strings.Split(v.Peer, ",")) //[]string{v.Peer})
 }
 
 func wsHandleP2P(ws *websocket.Conn) {
@@ -156,55 +143,92 @@ func wsHandleP2P(ws *websocket.Conn) {
 			break
 		}
 		msgStr := utiles.Indent(msg)
-		log.Printf("Received[from %s]: %s.\n<<0:queryLatest 1:queryAll 2:responseBlockchain>>\n", peer, msgStr)
+		log.Printf("Received[from %s]: %s.\n", peer, msgStr)
 		err = json.Unmarshal(msg, v)
 		errFatal("invalid p2p msg", err)
 
 		switch v.Type {
-		case queryLatest:
-			v.Type = responseBlockchain
+		case "queryLatest":
+			v.Type = "responseBlockchain"
 
 			bs := responseLatestMsg()
 			bsStr := utiles.Indent(bs)
 			log.Printf("responseLatestMsg: %s\n", bsStr)
 			ws.Write(bs)
 
-		case queryAll:
+		case "queryAll":
 			d, _ := json.MarshalIndent(blockchain, "", "    ")
-			v.Type = responseBlockchain
+			v.Type = "responseBlockchain"
 			v.Data = string(d)
 			bs, _ := json.MarshalIndent(v, "", "    ")
 			bsStr := utiles.Indent(bs)
 			log.Printf("responseChainMsg: %s\n", bsStr)
 			ws.Write(bs)
 
-		case responseBlockchain:
+		case "responseBlockchain":
 			handleBlockchainResponse([]byte(v.Data))
-		}
 
+		case "transaction":
+			var txn Transaction
+			err = json.Unmarshal([]byte(v.Data), &txn)
+			errFatal("invalid transaction msg", err)
+			addTransaction(&txn)
+
+		case "mine":
+			go handleMineBlock()
+
+		case "pubKey":
+			var pk PubKey
+			err = json.Unmarshal([]byte(v.Data), &pk)
+			errFatal("invalid pubkey msg", err)
+			savePubKey(&pk)
+		}
 	}
 }
 
 func getLatestBlock() (block *Block) { return blockchain[len(blockchain)-1] }
 func responseLatestMsg() (bs []byte) {
-	var v = &ResponseBlockchain{Type: responseBlockchain}
+	var v = &ResponseBlockchain{Type: "responseBlockchain"}
 	d, _ := json.Marshal(blockchain[len(blockchain)-1:])
 	v.Data = string(d)
 	bs, _ = json.Marshal(v)
 	return
 }
-func queryLatestMsg() []byte { return []byte(fmt.Sprintf("{\"type\": %d}", queryLatest)) }
-func queryAllMsg() []byte    { return []byte(fmt.Sprintf("{\"type\": %d}", queryAll)) }
+func newTransactionMsg(t Transaction) (bs []byte) {
+	var v = &ResponseBlockchain{Type: "transaction"}
+	d, _ := json.Marshal(t)
+	v.Data = string(d)
+	bs, _ = json.Marshal(v)
+	return
+}
+func mineMsg() (bs []byte) {
+	var v = &ResponseBlockchain{Type: "mine"}
+	v.Data = ""
+	bs, _ = json.Marshal(v)
+	return
+}
+func pubKeyMsg(pk *PubKey) (bs []byte) {
+	var v = &ResponseBlockchain{Type: "pubKey"}
+	d, _ := json.Marshal(pk)
+	v.Data = string(d)
+	bs, _ = json.Marshal(v)
+	return
+}
+func queryLatestMsg() []byte { return []byte(fmt.Sprintf("{\"type\": %s}", "\"queryLatest\"")) }
+func queryAllMsg() []byte    { return []byte(fmt.Sprintf("{\"type\": %s}", "\"queryAll\"")) }
 func calculateHashForBlock(b *Block) string {
-	return fmt.Sprintf("%x", sha256.Sum256([]byte(fmt.Sprintf("%d%s%d%s", b.Index, b.PreviousHash, b.Timestamp, b.Data))))
+	return fmt.Sprintf("%x", sha256.Sum256([]byte(fmt.Sprintf("%d%s%d%s%s", b.Index, b.PreviousHash, b.Timestamp, b.ExtraData, b.TxnRoot))))
 }
 func generateNextBlock(data string) (nb *Block) {
 	var previousBlock = getLatestBlock()
+	root := getMerkleRoot()
 	nb = &Block{
-		Data:         data,
+		ExtraData:    data,
+		Txns:         allTxns(),
 		PreviousHash: previousBlock.Hash,
 		Index:        previousBlock.Index + 1,
 		Timestamp:    time.Now().Unix(),
+		TxnRoot:      root,
 	}
 	nb.Hash = calculateHashForBlock(nb)
 	return
@@ -213,6 +237,20 @@ func addBlock(b *Block) {
 	if isValidNewBlock(b, getLatestBlock()) {
 		blockchain = append(blockchain, b)
 	}
+}
+
+func allTxns() []string {
+	var txns []string
+
+	if len(txnPool) == 0 {
+		return []string{}
+	}
+	txnPoolCopy := txnPool
+	txnPool = []*Transaction{}
+	for _, t := range txnPoolCopy {
+		txns = append(txns, t.String())
+	}
+	return txns
 }
 func isValidNewBlock(nb, pb *Block) (ok bool) {
 	if nb.Hash == calculateHashForBlock(nb) &&
@@ -255,7 +293,12 @@ func broadcast(msg []byte) {
 		}
 	}
 }
-
+func notify(index int, msg []byte) {
+	_, err := sockets[index].Write(msg)
+	if err != nil {
+		log.Printf("peer [%s] disconnected.", sockets[index].RemoteAddr().String())
+	}
+}
 func handleBlockchainResponse(msg []byte) {
 	var receivedBlocks = []*Block{}
 
@@ -283,18 +326,76 @@ func handleBlockchainResponse(msg []byte) {
 	}
 }
 
+// 每隔60个块为一个阶段，每隔阶段使用不同的秘钥对，当还剩20块的时间时，更新下一个阶段的秘钥
+func updateKeypair() {
+	count := 0
+
+	geneKeyPair := func() {
+		kp, _ := utiles.RequestKeyPair()
+		pk := &PubKey{NodeName: *nodeName, Stage: count / 60, PubKey: kp.PubKey}
+		savePubKey(pk)
+		broadcast(pubKeyMsg(pk))
+		count += 60
+		log.Printf("[updateKeypair] update stage=%d key = %v", count/60, kp.PubKey)
+	}
+	//定时通知出块
+	go func() {
+		t, _ := strconv.Atoi(*interval)
+		c := time.Tick(time.Duration(int64(t)) * time.Second)
+		for {
+			//还未出块的时候 生成第1阶段（0-59）的秘钥对
+			if len(blockchain) == 0 {
+				geneKeyPair()
+			} else { //伺候定时检查当前块高度，给每隔阶段生成新的秘钥对
+				height := getLatestBlock().Index
+				if count-int(height) < 20 {
+					geneKeyPair()
+				}
+			}
+			<-c
+		}
+	}()
+}
+
+func notifyNodeMsg() {
+	//定时通知出块
+	count := 0
+	go func() {
+		t, _ := strconv.Atoi(*interval)
+		c := time.Tick(time.Duration(int64(t)) * time.Second)
+		for {
+			<-c
+			if len(sockets) == 0 {
+				handleMineBlock()
+				log.Println("[mine] Mine local...")
+			} else {
+				notify(count%len(sockets), mineMsg())
+				log.Println("[mine] Notify to mine block node index = ", count%len(sockets))
+			}
+			count++
+		}
+	}()
+}
 func main() {
 	flag.Parse()
+	log.Printf("####################\n")
+	log.Printf("Current Node Name = %s. IsSuperNode = %v.\n", *nodeName, *superNode)
+	log.Printf("####################\n")
+
 	connectToPeers(strings.Split(*initialPeers, ","))
 
 	http.HandleFunc("/blocks", handleBlocks)
-	http.HandleFunc("/mine_block", handleMineBlock)
+	http.HandleFunc("/send_transaction", handleTransaction)
+	http.HandleFunc("/pendings", handlePendings)
 	http.HandleFunc("/peers", handlePeers)
 	http.HandleFunc("/add_peer", handleAddPeer)
 	go func() {
 		log.Println("Listen HTTP on", *httpAddr)
 		errFatal("start api server", http.ListenAndServe(*httpAddr, nil))
 	}()
+	if *superNode == true {
+		notifyNodeMsg()
+	}
 
 	http.Handle("/", websocket.Handler(wsHandleP2P))
 	log.Println("Listen P2P on ", *p2pAddr)
