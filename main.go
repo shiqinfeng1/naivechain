@@ -247,17 +247,17 @@ func pubKeyMsg(pk []PubKeyInfo) (bs []byte) {
 func queryLatestMsg() []byte { return []byte(fmt.Sprintf("{\"type\": %s}", "\"queryLatest\"")) }
 func queryAllMsg() []byte    { return []byte(fmt.Sprintf("{\"type\": %s}", "\"queryAll\"")) }
 func calculateHashForBlock(b *Block) string {
-	return fmt.Sprintf("%x", sha256.Sum256([]byte(fmt.Sprintf("%d%s%d%s%s", b.Index, b.PreviousHash, b.Timestamp, b.ExtraData, b.TxnRoot))))
+	return fmt.Sprintf("%x", sha256.Sum256([]byte(fmt.Sprintf("%d%s%d%s%s", b.BlockNumber, b.PreviousHash, b.Timestamp, b.Miner, b.TxnRoot))))
 }
 func generateNextBlock(data string) (nb *Block) {
 	var previousBlock = getLatestBlock()
 	txns := allTxns()
 	root := getMerkleRoot(txns)
 	nb = &Block{
-		ExtraData:    data,
+		Miner:        data,
 		Txns:         formatAllTxns(txns),
 		PreviousHash: previousBlock.Hash,
-		Index:        previousBlock.Index + 1,
+		BlockNumber:  previousBlock.BlockNumber + 1,
 		Timestamp:    time.Now().Unix(),
 		TxnRoot:      root,
 	}
@@ -273,7 +273,7 @@ func addBlock(b *Block) {
 
 func isValidNewBlock(nb, pb *Block) (ok bool) {
 	if nb.Hash == calculateHashForBlock(nb) &&
-		pb.Index+1 == nb.Index &&
+		pb.BlockNumber+1 == nb.BlockNumber &&
 		pb.Hash == nb.PreviousHash {
 		ok = true
 	}
@@ -360,8 +360,8 @@ func handleBlockchainResponse(msg []byte) {
 
 	latestBlockReceived := receivedBlocks[len(receivedBlocks)-1]
 	latestBlockHeld := getLatestBlock()
-	if latestBlockReceived.Index > latestBlockHeld.Index {
-		log.Printf("Blockchain Possibly Behind. We Got: %d Peer Got: %d", latestBlockHeld.Index, latestBlockReceived.Index)
+	if latestBlockReceived.BlockNumber > latestBlockHeld.BlockNumber {
+		log.Printf("Blockchain Possibly Behind. We Got: %d Peer Got: %d", latestBlockHeld.BlockNumber, latestBlockReceived.BlockNumber)
 		if latestBlockHeld.Hash == latestBlockReceived.PreviousHash {
 			log.Println("We Can Append The Received Block To Our Chain.")
 			blockchain = append(blockchain, latestBlockReceived)
@@ -405,7 +405,7 @@ func updateKeypair() {
 			if len(blockchain) == 0 {
 				geneKeyPair()
 			} else { //伺候定时检查当前块高度，给每隔阶段生成新的秘钥对
-				height := getLatestBlock().Index
+				height := getLatestBlock().BlockNumber
 				//如果高度较高，使得 count-height 为负数，需要生成秘钥对
 				if count-int(height) < (cycle / 4) {
 					geneKeyPair()

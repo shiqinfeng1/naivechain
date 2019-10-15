@@ -54,7 +54,7 @@ func (t Transaction) CalculateHash() ([]byte, error) {
 	latestBlock := getLatestBlock()
 	//获取最新高度的下一块的stage
 	var keys []string
-	pks := allPubKeyByStage(int(latestBlock.Index+1) / cycle)
+	pks := allPubKeyByStage(int(latestBlock.BlockNumber+1) / cycle)
 	for _, k := range pks {
 		keys = append(keys, k.PubKey)
 	}
