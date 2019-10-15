@@ -18,16 +18,17 @@ import (
 )
 
 var (
+	cycle        = 60
 	sockets      []*websocket.Conn
 	blockchain   = []*Block{genesisBlock}
 	txnPool      []*Transaction
-	pubKeys      = make(map[int]map[string]string)
+	pubKeyinfos  = []PubKeyInfo{}
 	superNode    = flag.Bool("supernode", false, "super node.")
 	nodeName     = flag.String("nodename", "no name", "node name.")
 	httpAddr     = flag.String("api", "", "api server address.")
 	p2pAddr      = flag.String("p2p", "", "p2p server address.")
 	initialPeers = flag.String("peers", "", "initial peers")
-	interval     = flag.String("interval", "60", "interval of mining block time.")
+	interval     = flag.String("interval", "60", "senonds interval of mining block time.")
 )
 
 //ResponseBlockchain 节点交互通用数据结构
@@ -36,11 +37,12 @@ type ResponseBlockchain struct {
 	Data string `json:"data"`
 }
 
-//PubKey PubKey
-type PubKey struct {
-	NodeName string `json:"nodeName"`
-	Stage    int    `json:"stage"`
-	PubKey   string `json:"pubkey"`
+//PubKeyInfo 公钥存储结构
+type PubKeyInfo struct {
+	NodeName  string `json:"nodeName"`
+	Stage     int    `json:"stage"`
+	PubKey    string `json:"pubkey"`
+	TimeStamp string `json:"timeStamp"`
 }
 
 func errFatal(msg string, err error) {
@@ -82,7 +84,7 @@ func handleMineBlock() {
 	addBlock(block)
 	broadcast(responseLatestMsg())
 }
-func handleTransaction(w http.ResponseWriter, r *http.Request) {
+func handleSendTransaction(w http.ResponseWriter, r *http.Request) {
 	var txn Transaction
 	decoder := json.NewDecoder(r.Body)
 	defer r.Body.Close()
@@ -93,8 +95,24 @@ func handleTransaction(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("invalid transaction data. " + err.Error() + "\n"))
 		return
 	}
+	txn.R = randValue()
 	addTransaction(&txn)
 	broadcast(newTransactionMsg(txn))
+}
+func handleQueryTransaction(w http.ResponseWriter, r *http.Request) {
+	var txnFilter TxnFilter
+	decoder := json.NewDecoder(r.Body)
+	defer r.Body.Close()
+	err := decoder.Decode(&txnFilter)
+	if err != nil {
+		w.WriteHeader(http.StatusGone)
+		log.Println("[API] invalid transaction data : ", err.Error())
+		w.Write([]byte("invalid transaction data. " + err.Error() + "\n"))
+		return
+	}
+	result := queryTransaction(&txnFilter)
+	bs, _ := json.MarshalIndent(result, "", "    ")
+	w.Write(bs)
 }
 func handlePeers(w http.ResponseWriter, r *http.Request) {
 	var slice []string
@@ -106,6 +124,11 @@ func handlePeers(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	bs, _ := json.MarshalIndent(slice, "", "    ")
+	w.Write(bs)
+}
+
+func handlepubkeys(w http.ResponseWriter, r *http.Request) {
+	bs, _ := json.MarshalIndent(pubKeyinfos, "", "    ")
 	w.Write(bs)
 }
 func handleAddPeer(w http.ResponseWriter, r *http.Request) {
@@ -153,16 +176,20 @@ func wsHandleP2P(ws *websocket.Conn) {
 
 			bs := responseLatestMsg()
 			bsStr := utiles.Indent(bs)
-			log.Printf("responseLatestMsg: %s\n", bsStr)
+			log.Printf("response LatestMsg: %s\n", bsStr)
 			ws.Write(bs)
 
+			//除了发送最新的区块数据外，还发送公钥和随机数
+			log.Printf("response pubKey: %s\n", bsStr)
+			ws.Write(pubKeyMsg(allPubKeyByNode(*nodeName)))
+
 		case "queryAll":
-			d, _ := json.MarshalIndent(blockchain, "", "    ")
+			d, _ := json.Marshal(blockchain)
 			v.Type = "responseBlockchain"
-			v.Data = string(d)
-			bs, _ := json.MarshalIndent(v, "", "    ")
+			v.Data = utiles.Indent(d)
+			bs, _ := json.Marshal(v)
 			bsStr := utiles.Indent(bs)
-			log.Printf("responseChainMsg: %s\n", bsStr)
+			fmt.Printf("response ChainMsg: %s\n", bsStr)
 			ws.Write(bs)
 
 		case "responseBlockchain":
@@ -178,10 +205,12 @@ func wsHandleP2P(ws *websocket.Conn) {
 			go handleMineBlock()
 
 		case "pubKey":
-			var pk PubKey
+			var pk []PubKeyInfo
 			err = json.Unmarshal([]byte(v.Data), &pk)
 			errFatal("invalid pubkey msg", err)
-			savePubKey(&pk)
+			for _, pubkey := range pk {
+				savePubKey(&pubkey)
+			}
 		}
 	}
 }
@@ -207,7 +236,7 @@ func mineMsg() (bs []byte) {
 	bs, _ = json.Marshal(v)
 	return
 }
-func pubKeyMsg(pk *PubKey) (bs []byte) {
+func pubKeyMsg(pk []PubKeyInfo) (bs []byte) {
 	var v = &ResponseBlockchain{Type: "pubKey"}
 	d, _ := json.Marshal(pk)
 	v.Data = string(d)
@@ -221,17 +250,18 @@ func calculateHashForBlock(b *Block) string {
 }
 func generateNextBlock(data string) (nb *Block) {
 	var previousBlock = getLatestBlock()
-	root := getMerkleRoot()
+	txns := allTxns()
+	root := getMerkleRoot(txns)
 	nb = &Block{
 		ExtraData:    data,
-		Txns:         allTxns(),
+		Txns:         formatAllTxns(txns),
 		PreviousHash: previousBlock.Hash,
 		Index:        previousBlock.Index + 1,
 		Timestamp:    time.Now().Unix(),
 		TxnRoot:      root,
 	}
 	nb.Hash = calculateHashForBlock(nb)
-	return
+	return nb
 }
 func addBlock(b *Block) {
 	if isValidNewBlock(b, getLatestBlock()) {
@@ -239,19 +269,6 @@ func addBlock(b *Block) {
 	}
 }
 
-func allTxns() []string {
-	var txns []string
-
-	if len(txnPool) == 0 {
-		return []string{}
-	}
-	txnPoolCopy := txnPool
-	txnPool = []*Transaction{}
-	for _, t := range txnPoolCopy {
-		txns = append(txns, t.String())
-	}
-	return txns
-}
 func isValidNewBlock(nb, pb *Block) (ok bool) {
 	if nb.Hash == calculateHashForBlock(nb) &&
 		pb.Index+1 == nb.Index &&
@@ -299,6 +316,34 @@ func notify(index int, msg []byte) {
 		log.Printf("peer [%s] disconnected.", sockets[index].RemoteAddr().String())
 	}
 }
+func deleteMinedTxn(minedblocks []*Block) {
+
+	if len(txnPool) == 0 {
+		log.Println("[deleteMinedTxn] No Txn in TxnPool.")
+		return
+	}
+	//遍历收到的区块
+	for n, block := range minedblocks {
+		if len(block.Txns) == 0 {
+			log.Println("[deleteMinedTxn] No Txn in Block ", n, ".")
+			continue
+		}
+		//遍历区块中的交易
+		for _, tx := range block.Txns {
+			//解析交易
+			var txn Transaction
+			json.Unmarshal([]byte(tx), &txn)
+			//查找交易是否在交易池中
+			for n, tx := range txnPool {
+				if result, err := txn.Equals(*tx); err == nil {
+					if result == true {
+						txnPool = append(txnPool[0:n], txnPool[n+1:]...)
+					}
+				}
+			}
+		}
+	}
+}
 func handleBlockchainResponse(msg []byte) {
 	var receivedBlocks = []*Block{}
 
@@ -306,6 +351,8 @@ func handleBlockchainResponse(msg []byte) {
 	errFatal("invalid blockchain", err)
 
 	sort.Sort(ByIndex(receivedBlocks))
+	//删除本地交易池中已被打包的交易
+	deleteMinedTxn(receivedBlocks)
 
 	latestBlockReceived := receivedBlocks[len(receivedBlocks)-1]
 	latestBlockHeld := getLatestBlock()
@@ -329,14 +376,21 @@ func handleBlockchainResponse(msg []byte) {
 // 每隔60个块为一个阶段，每隔阶段使用不同的秘钥对，当还剩20块的时间时，更新下一个阶段的秘钥
 func updateKeypair() {
 	count := 0
-
 	geneKeyPair := func() {
-		kp, _ := utiles.RequestKeyPair()
-		pk := &PubKey{NodeName: *nodeName, Stage: count / 60, PubKey: kp.PubKey}
+		kp, err := utiles.RequestKeyPair()
+		if err != nil {
+			log.Printf("[updateKeypair] fail. stage=%d err=%v", count/cycle, err)
+			return
+		}
+		pk := &PubKeyInfo{
+			NodeName:  *nodeName,
+			Stage:     count / cycle,
+			PubKey:    kp.PubKey,
+			TimeStamp: time.Now().Format("2006-01-02 15:04:05")}
 		savePubKey(pk)
-		broadcast(pubKeyMsg(pk))
-		count += 60
-		log.Printf("[updateKeypair] update stage=%d key = %v", count/60, kp.PubKey)
+		broadcast(pubKeyMsg(allPubKeyByNode(*nodeName)))
+		log.Printf("[updateKeypair] Gene New keypair = %+v", pk)
+		count += cycle
 	}
 	//定时通知出块
 	go func() {
@@ -348,7 +402,8 @@ func updateKeypair() {
 				geneKeyPair()
 			} else { //伺候定时检查当前块高度，给每隔阶段生成新的秘钥对
 				height := getLatestBlock().Index
-				if count-int(height) < 20 {
+				//如果高度较高，使得 count-height 为负数，需要生成秘钥对
+				if count-int(height) < (cycle / 4) {
 					geneKeyPair()
 				}
 			}
@@ -385,9 +440,11 @@ func main() {
 	connectToPeers(strings.Split(*initialPeers, ","))
 
 	http.HandleFunc("/blocks", handleBlocks)
-	http.HandleFunc("/send_transaction", handleTransaction)
 	http.HandleFunc("/pendings", handlePendings)
 	http.HandleFunc("/peers", handlePeers)
+	http.HandleFunc("/pubkeys", handlepubkeys)
+	http.HandleFunc("/send_transaction", handleSendTransaction)
+	http.HandleFunc("/query_transaction", handleQueryTransaction)
 	http.HandleFunc("/add_peer", handleAddPeer)
 	go func() {
 		log.Println("Listen HTTP on", *httpAddr)
@@ -396,6 +453,7 @@ func main() {
 	if *superNode == true {
 		notifyNodeMsg()
 	}
+	go updateKeypair()
 
 	http.Handle("/", websocket.Handler(wsHandleP2P))
 	log.Println("Listen P2P on ", *p2pAddr)
