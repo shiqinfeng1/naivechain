@@ -14,11 +14,11 @@ var genesisBlock = &Block{
 
 //Block 区块
 type Block struct {
-	Index        int64    `json:"index"`
+	Index        int64    `json:"blockNumber"`
 	PreviousHash string   `json:"previousHash"`
 	Timestamp    int64    `json:"timestamp"`
 	Txns         []string `json:"txns"`
-	ExtraData    string   `json:"extraData"`
+	ExtraData    string   `json:"miner"`
 	Hash         string   `json:"hash"`
 	TxnRoot      string   `json:"txnRoot"`
 }

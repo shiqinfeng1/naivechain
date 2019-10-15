@@ -165,8 +165,8 @@ func wsHandleP2P(ws *websocket.Conn) {
 			log.Println("Can't receive p2p msg from ", peer, err.Error())
 			break
 		}
-		msgStr := utiles.Indent(msg)
-		log.Printf("Received[from %s]: %s.\n", peer, msgStr)
+		//msgStr := utiles.Indent(msg)
+		//log.Printf("Received[from %s]: %s.\n", peer, msgStr)
 		err = json.Unmarshal(msg, v)
 		errFatal("invalid p2p msg", err)
 
@@ -176,11 +176,11 @@ func wsHandleP2P(ws *websocket.Conn) {
 
 			bs := responseLatestMsg()
 			bsStr := utiles.Indent(bs)
-			log.Printf("response LatestMsg: %s\n", bsStr)
+			log.Printf("Response Latest Block: %s\n", bsStr)
 			ws.Write(bs)
 
 			//除了发送最新的区块数据外，还发送公钥和随机数
-			log.Printf("response pubKey: %s\n", bsStr)
+			log.Printf("Notify Latest PubKey...\n")
 			ws.Write(pubKeyMsg(allPubKeyByNode(*nodeName)))
 
 		case "queryAll":
@@ -189,7 +189,7 @@ func wsHandleP2P(ws *websocket.Conn) {
 			v.Data = utiles.Indent(d)
 			bs, _ := json.Marshal(v)
 			bsStr := utiles.Indent(bs)
-			fmt.Printf("response ChainMsg: %s\n", bsStr)
+			log.Printf("Response Chain Data: %s\n", bsStr)
 			ws.Write(bs)
 
 		case "responseBlockchain":
@@ -202,6 +202,7 @@ func wsHandleP2P(ws *websocket.Conn) {
 			addTransaction(&txn)
 
 		case "mine":
+			log.Printf("In-Turn To Mine ...\n")
 			go handleMineBlock()
 
 		case "pubKey":
@@ -261,6 +262,7 @@ func generateNextBlock(data string) (nb *Block) {
 		TxnRoot:      root,
 	}
 	nb.Hash = calculateHashForBlock(nb)
+	log.Printf("Mined Block: %+v\n", nb)
 	return nb
 }
 func addBlock(b *Block) {
@@ -319,13 +321,13 @@ func notify(index int, msg []byte) {
 func deleteMinedTxn(minedblocks []*Block) {
 
 	if len(txnPool) == 0 {
-		log.Println("[deleteMinedTxn] No Txn in TxnPool.")
+		//log.Println("[deleteMinedTxn] No Txn in TxnPool.")
 		return
 	}
 	//遍历收到的区块
-	for n, block := range minedblocks {
+	for b, block := range minedblocks {
 		if len(block.Txns) == 0 {
-			log.Println("[deleteMinedTxn] No Txn in Block ", n, ".")
+			//log.Println("[deleteMinedTxn] No Txn in Block ", n, ".")
 			continue
 		}
 		//遍历区块中的交易
@@ -338,6 +340,7 @@ func deleteMinedTxn(minedblocks []*Block) {
 				if result, err := txn.Equals(*tx); err == nil {
 					if result == true {
 						txnPool = append(txnPool[0:n], txnPool[n+1:]...)
+						log.Printf("Sync To Delete Mined Transaction In TxnPool Of Block %d.", b)
 					}
 				}
 			}
@@ -350,6 +353,7 @@ func handleBlockchainResponse(msg []byte) {
 	err := json.Unmarshal(msg, &receivedBlocks)
 	errFatal("invalid blockchain", err)
 
+	log.Printf("Receive Synced Latest Block: %+v\n", receivedBlocks)
 	sort.Sort(ByIndex(receivedBlocks))
 	//删除本地交易池中已被打包的交易
 	deleteMinedTxn(receivedBlocks)
@@ -357,19 +361,19 @@ func handleBlockchainResponse(msg []byte) {
 	latestBlockReceived := receivedBlocks[len(receivedBlocks)-1]
 	latestBlockHeld := getLatestBlock()
 	if latestBlockReceived.Index > latestBlockHeld.Index {
-		log.Printf("blockchain possibly behind. We got: %d Peer got: %d", latestBlockHeld.Index, latestBlockReceived.Index)
+		log.Printf("Blockchain Possibly Behind. We Got: %d Peer Got: %d", latestBlockHeld.Index, latestBlockReceived.Index)
 		if latestBlockHeld.Hash == latestBlockReceived.PreviousHash {
-			log.Println("We can append the received block to our chain.")
+			log.Println("We Can Append The Received Block To Our Chain.")
 			blockchain = append(blockchain, latestBlockReceived)
 		} else if len(receivedBlocks) == 1 {
-			log.Println("We have to query the chain from our peer.")
+			log.Println("We Have To Query The Chain From Our Peer.")
 			broadcast(queryAllMsg())
 		} else {
-			log.Println("Received blockchain is longer than current blockchain.")
+			log.Println("Received Blockchain Is Longer Than Current Blockchain.")
 			replaceChain(receivedBlocks)
 		}
 	} else {
-		log.Println("received blockchain is not longer than current blockchain. Do nothing.")
+		log.Println("Received Blockchain Is Not Longer Than Current Blockchain. Do Nothing.")
 	}
 }
 
@@ -422,10 +426,10 @@ func notifyNodeMsg() {
 			<-c
 			if len(sockets) == 0 {
 				handleMineBlock()
-				log.Println("[mine] Mine local...")
+				log.Println("In-Turn To Mine ...")
 			} else {
 				notify(count%len(sockets), mineMsg())
-				log.Println("[mine] Notify to mine block node index = ", count%len(sockets))
+				//log.Println("[mine] Notify to mine block node index = ", count%len(sockets))
 			}
 			count++
 		}

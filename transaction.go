@@ -29,6 +29,14 @@ type TxnFilter struct {
 	End   string `json:"end"`
 }
 
+//TxnDesc 交易描述
+type TxnDesc struct {
+	Transaction   Transaction `json:"transaction"`
+	MinedBlock    int         `json:"minedBlock"`
+	MinedTime     string      `json:"minedtime"`
+	ChameleonHash string      `json:"chameleonHash"`
+}
+
 func (t *Transaction) String() string {
 	// return fmt.Sprintf("from:%s,to:%s,value:%s,data:%s",
 	// 	t.From, t.To, t.Value, t.Data)
@@ -74,11 +82,11 @@ func (t Transaction) Equals(other merkletree.Content) (bool, error) {
 func addTransaction(t *Transaction) {
 	txnPool = append(txnPool, t)
 }
-func queryTransaction(t *TxnFilter) []Transaction {
-	var matched []Transaction
+func queryTransaction(t *TxnFilter) []TxnDesc {
+	var matched []TxnDesc
 	format := "2006-01-02 15:04:05"
 	//遍历所有区块
-	for _, block := range blockchain {
+	for n, block := range blockchain {
 		if len(block.Txns) == 0 {
 			continue
 		}
@@ -96,7 +104,12 @@ func queryTransaction(t *TxnFilter) []Transaction {
 					(t.Start == "" || (t.Start != "" && start.Before(blocktime))) &&
 					(t.End == "" || (t.End != "" && end.After(blocktime)))
 			if match {
-				matched = append(matched, txn)
+				chash, _ := txn.CalculateHash()
+				matched = append(matched,
+					TxnDesc{Transaction: txn,
+						MinedBlock:    n,
+						MinedTime:     blocktime.Format(format),
+						ChameleonHash: hex.EncodeToString(chash)})
 			}
 		}
 	}
