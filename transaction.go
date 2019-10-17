@@ -115,29 +115,32 @@ func queryTransaction(t *TxnFilter) []TxnDesc {
 	}
 	return matched
 }
-func savePubKey(pk *PubKeyInfo) {
-	//如果是重复的pubkey， 不更新
-	for _, pubKey := range pubKeyinfos {
+func saveKeyPair(pk *KeyPairInfo) {
+	//如果是重复的pubkey， 更新为最新
+	for n, pubKey := range keypairinfos {
 		if pk.Stage == pubKey.Stage && pk.NodeName == pubKey.NodeName {
+			keypairinfos[n].PubKey = pk.PubKey
+			keypairinfos[n].PrivKey = pk.PrivKey
 			return
 		}
 	}
-	pubKeyinfos = append(pubKeyinfos, *pk)
+	keypairinfos = append(keypairinfos, *pk)
 }
-
-func allPubKeyByStage(stage int) []PubKeyInfo {
-	var pks []PubKeyInfo
-	for _, pubKey := range pubKeyinfos {
+func allPubKeyByStage(stage int) []KeyPairInfo {
+	var pks []KeyPairInfo
+	for _, pubKey := range keypairinfos {
 		if stage == pubKey.Stage {
+			pubKey.PrivKey = "" //发送的公钥中不包含私钥
 			pks = append(pks, pubKey)
 		}
 	}
 	return pks
 }
-func allPubKeyByNode(nodeName string) []PubKeyInfo {
-	var pks []PubKeyInfo
-	for _, pubKey := range pubKeyinfos {
+func allPubKeyByNode(nodeName string) []KeyPairInfo {
+	var pks []KeyPairInfo
+	for _, pubKey := range keypairinfos {
 		if nodeName == pubKey.NodeName {
+			pubKey.PrivKey = "" //发送的公钥中不包含私钥
 			pks = append(pks, pubKey)
 		}
 	}

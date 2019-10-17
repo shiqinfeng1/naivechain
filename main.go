@@ -22,7 +22,7 @@ var (
 	sockets      []*websocket.Conn
 	blockchain   = []*Block{genesisBlock}
 	txnPool      []*Transaction
-	pubKeyinfos  = []PubKeyInfo{}
+	keypairinfos = []KeyPairInfo{}
 	superNode    = flag.Bool("supernode", false, "super node.")
 	nodeName     = flag.String("nodename", "no name", "node name.")
 	httpAddr     = flag.String("api", "", "api server address.")
@@ -37,11 +37,12 @@ type ResponseBlockchain struct {
 	Data string `json:"data"`
 }
 
-//PubKeyInfo 公钥存储结构
-type PubKeyInfo struct {
+//KeyPairInfo 公钥存储结构
+type KeyPairInfo struct {
 	NodeName  string `json:"nodeName"`
 	Stage     int    `json:"stage"`
 	PubKey    string `json:"pubkey"`
+	PrivKey   string `json:"privkey"`
 	TimeStamp string `json:"timeStamp"`
 }
 
@@ -127,10 +128,14 @@ func handlePeers(w http.ResponseWriter, r *http.Request) {
 	w.Write(bs)
 }
 
-func handlepubkeys(w http.ResponseWriter, r *http.Request) {
-	bs, _ := json.MarshalIndent(pubKeyinfos, "", "    ")
+func handlekeypairs(w http.ResponseWriter, r *http.Request) {
+	bs, _ := json.MarshalIndent(keypairinfos, "", "    ")
 	w.Write(bs)
 }
+func handleDelTxn(w http.ResponseWriter, r *http.Request) {
+	delTxnProposal()
+}
+
 func handleAddPeer(w http.ResponseWriter, r *http.Request) {
 	var v struct {
 		Peer string `json:"peer"`
@@ -206,11 +211,11 @@ func wsHandleP2P(ws *websocket.Conn) {
 			go handleMineBlock()
 
 		case "pubKey":
-			var pk []PubKeyInfo
+			var pk []KeyPairInfo
 			err = json.Unmarshal([]byte(v.Data), &pk)
 			errFatal("invalid pubkey msg", err)
 			for _, pubkey := range pk {
-				savePubKey(&pubkey)
+				saveKeyPair(&pubkey)
 			}
 		}
 	}
@@ -237,13 +242,14 @@ func mineMsg() (bs []byte) {
 	bs, _ = json.Marshal(v)
 	return
 }
-func pubKeyMsg(pk []PubKeyInfo) (bs []byte) {
+func pubKeyMsg(pk []KeyPairInfo) (bs []byte) {
 	var v = &ResponseBlockchain{Type: "pubKey"}
 	d, _ := json.Marshal(pk)
 	v.Data = string(d)
 	bs, _ = json.Marshal(v)
 	return
 }
+func delTxnProposal() []byte { return []byte(fmt.Sprintf("{\"type\": %s}", "\"delTxnProposal\"")) }
 func queryLatestMsg() []byte { return []byte(fmt.Sprintf("{\"type\": %s}", "\"queryLatest\"")) }
 func queryAllMsg() []byte    { return []byte(fmt.Sprintf("{\"type\": %s}", "\"queryAll\"")) }
 func calculateHashForBlock(b *Block) string {
@@ -386,12 +392,13 @@ func updateKeypair() {
 			log.Printf("[updateKeypair] fail. stage=%d err=%v", count/cycle, err)
 			return
 		}
-		pk := &PubKeyInfo{
+		pk := &KeyPairInfo{
 			NodeName:  *nodeName,
 			Stage:     count / cycle,
 			PubKey:    kp.PubKey,
+			PrivKey:   kp.PrivKey,
 			TimeStamp: time.Now().Format("2006-01-02 15:04:05")}
-		savePubKey(pk)
+		saveKeyPair(pk)
 		broadcast(pubKeyMsg(allPubKeyByNode(*nodeName)))
 		log.Printf("[updateKeypair] Gene New keypair = %+v", pk)
 		count += cycle
@@ -446,10 +453,12 @@ func main() {
 	http.HandleFunc("/blocks", handleBlocks)
 	http.HandleFunc("/pendings", handlePendings)
 	http.HandleFunc("/peers", handlePeers)
-	http.HandleFunc("/pubkeys", handlepubkeys)
+	http.HandleFunc("/keypairs", handlekeypairs)
 	http.HandleFunc("/send_transaction", handleSendTransaction)
 	http.HandleFunc("/query_transaction", handleQueryTransaction)
 	http.HandleFunc("/add_peer", handleAddPeer)
+	http.HandleFunc("/del_txn", handleDelTxn)
+
 	go func() {
 		log.Println("Listen HTTP on", *httpAddr)
 		errFatal("start api server", http.ListenAndServe(*httpAddr, nil))
