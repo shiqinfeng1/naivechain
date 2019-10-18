@@ -240,7 +240,7 @@ func wsHandleP2P(ws *websocket.Conn) {
 			err = json.Unmarshal([]byte(v.Data), &pk)
 			errFatal("invalid pubkey msg", err)
 			for _, pubkey := range pk {
-				updateKeyPair(&pubkey)
+				saveKeyPair(&pubkey)
 			}
 		case "delTxnProposal":
 			var selector TxnSelector
@@ -269,7 +269,7 @@ func wsHandleP2P(ws *websocket.Conn) {
 			err = json.Unmarshal([]byte(v.Data), &keyPairInfo)
 			errFatal("invalid del Txn Vote msg", err)
 			//保存私钥
-			saveKeyPair(&keyPairInfo)
+			updateKeyPair(&keyPairInfo)
 
 		case "updateBlock":
 			var block Block
@@ -292,7 +292,9 @@ func updateBlock(block Block) error {
 	if block.PreviousHash != blockchain[block.BlockNumber-1].Hash {
 		return fmt.Errorf("block.PreviousHash Is Not Equal prev.Hash:%v preHash:%v", block.PreviousHash, blockchain[block.BlockNumber-1].Hash)
 	}
-	if block.Hash != blockchain[block.BlockNumber+1].PreviousHash {
+	//更新的区块非最新高度的区块
+	if block.BlockNumber < int64(len(blockchain)-1) &&
+		block.Hash != blockchain[block.BlockNumber+1].PreviousHash {
 		return fmt.Errorf("block.Hash Is Not Equal Next.prevHash:%v next.prevHash:%v", block.Hash, blockchain[block.BlockNumber+1].PreviousHash)
 	}
 	blockchain[block.BlockNumber] = &block
