@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"log"
 	"math/rand"
 	"time"
@@ -18,23 +19,6 @@ type Transaction struct {
 	Value string `json:"value"`
 	Data  string `json:"data"`
 	R     string `json:"r"`
-}
-
-//TxnFilter 查询过滤条件
-type TxnFilter struct {
-	From  string `json:"from"`
-	To    string `json:"to"`
-	Value string `json:"value"`
-	Start string `json:"start"`
-	End   string `json:"end"`
-}
-
-//TxnDesc 交易描述
-type TxnDesc struct {
-	Transaction   Transaction `json:"transaction"`
-	MinedBlock    int         `json:"minedBlock"`
-	MinedTime     string      `json:"minedtime"`
-	ChameleonHash string      `json:"chameleonHash"`
 }
 
 func (t *Transaction) String() string {
@@ -79,6 +63,42 @@ func (t Transaction) Equals(other merkletree.Content) (bool, error) {
 	return equ, nil
 }
 
+//TxnFilter 查询过滤条件
+type TxnFilter struct {
+	From  string `json:"from"`
+	To    string `json:"to"`
+	Value string `json:"value"`
+	Start string `json:"start"`
+	End   string `json:"end"`
+}
+
+//TxnSelector 交易删除条件
+type TxnSelector struct {
+	BlockNumber int `json:"blocknumber"`
+	Index       int `json:"index"`
+}
+
+//TxnDesc 交易描述
+type TxnDesc struct {
+	Transaction   Transaction `json:"transaction"`
+	MinedBlock    int         `json:"minedBlock"`
+	MinedTime     string      `json:"minedtime"`
+	ChameleonHash string      `json:"chameleonHash"`
+}
+
+//IndexedTransaction 交易
+type IndexedTransaction struct {
+	Txn   Transaction `json:"Txn"`
+	Index int         `json:"index"`
+}
+
+func (t *IndexedTransaction) String() string {
+	// return fmt.Sprintf("from:%s,to:%s,value:%s,data:%s",
+	// 	t.From, t.To, t.Value, t.Data)
+	s, _ := json.Marshal(t)
+	return string(s)
+}
+
 func addTransaction(t *Transaction) {
 	txnPool = append(txnPool, t)
 }
@@ -92,21 +112,21 @@ func queryTransaction(t *TxnFilter) []TxnDesc {
 		}
 		//遍历区块中的所有交易
 		for _, tx := range block.Txns {
-			var txn Transaction
+			var txn IndexedTransaction
 			json.Unmarshal([]byte(tx), &txn)
 			start, _ := time.Parse(format, t.Start)
 			end, _ := time.Parse(format, t.End)
 			blocktime := time.Unix(int64(block.Timestamp), 0)
 			match :=
-				(t.From == "" || (t.From != "" && t.From == txn.From)) &&
-					(t.To == "" || (t.To != "" && t.To == txn.To)) &&
-					(t.Value == "" || (t.Value != "" && t.Value == txn.Value)) &&
+				(t.From == "" || (t.From != "" && t.From == txn.Txn.From)) &&
+					(t.To == "" || (t.To != "" && t.To == txn.Txn.To)) &&
+					(t.Value == "" || (t.Value != "" && t.Value == txn.Txn.Value)) &&
 					(t.Start == "" || (t.Start != "" && start.Before(blocktime))) &&
 					(t.End == "" || (t.End != "" && end.After(blocktime)))
 			if match {
-				chash, _ := txn.CalculateHash()
+				chash, _ := txn.Txn.CalculateHash()
 				matched = append(matched,
-					TxnDesc{Transaction: txn,
+					TxnDesc{Transaction: txn.Txn,
 						MinedBlock:    n,
 						MinedTime:     blocktime.Format(format),
 						ChameleonHash: hex.EncodeToString(chash)})
@@ -116,6 +136,15 @@ func queryTransaction(t *TxnFilter) []TxnDesc {
 	return matched
 }
 func saveKeyPair(pk *KeyPairInfo) {
+	//如果是重复的pubkey， 更新为最新
+	for _, pubKey := range keypairinfos {
+		if pk.Stage == pubKey.Stage && pk.NodeName == pubKey.NodeName {
+			return
+		}
+	}
+	keypairinfos = append(keypairinfos, *pk)
+}
+func updateKeyPair(pk *KeyPairInfo) {
 	//如果是重复的pubkey， 更新为最新
 	for n, pubKey := range keypairinfos {
 		if pk.Stage == pubKey.Stage && pk.NodeName == pubKey.NodeName {
@@ -132,6 +161,15 @@ func allPubKeyByStage(stage int) []KeyPairInfo {
 		if stage == pubKey.Stage {
 			pubKey.PrivKey = "" //发送的公钥中不包含私钥
 			pks = append(pks, pubKey)
+		}
+	}
+	return pks
+}
+func allPrivKeyByStage(stage int) []KeyPairInfo {
+	var pks []KeyPairInfo
+	for _, keypair := range keypairinfos {
+		if stage == keypair.Stage {
+			pks = append(pks, keypair)
 		}
 	}
 	return pks
@@ -189,8 +227,86 @@ func allTxns() []*Transaction {
 
 func formatAllTxns(all []*Transaction) []string {
 	var txns []string
+	index := 0
+	var txn IndexedTransaction
 	for _, t := range all {
-		txns = append(txns, t.String())
+		txn.Txn = *t
+		txn.Index = index
+		txns = append(txns, txn.String())
+		index++
 	}
 	return txns
+}
+
+func delTxnProposal(txnSelector TxnSelector, done chan error) {
+	var votedAll bool
+	stage := txnSelector.BlockNumber / cycle
+
+	//检查是否收到指定阶段的私钥
+	queryPrivKey := func() (privkeys []KeyPairInfo) {
+		votedAll = true
+		for _, keypair := range keypairinfos {
+			if stage == keypair.Stage {
+				if keypair.PrivKey == "" {
+					//还有peer未发送私钥过来
+					votedAll = false
+				}
+				privkeys = append(privkeys, keypair)
+			}
+		}
+		return
+	}
+
+	//1s检查一次私钥,超过10s则超时返回不在检查
+	count := 10
+	c := time.Tick(time.Duration(1) * time.Second)
+	for {
+		privkeys := queryPrivKey()
+		if votedAll == true {
+			break
+		}
+		count--
+		if count == 0 {
+			done <- fmt.Errorf("Wait Priv Key Timeout: %+v", privkeys)
+			return
+		}
+		<-c
+	}
+
+	//获取删除交易后的新的r
+	reqHash := func() error {
+		//获取对应stage的所有私钥
+		var keys []string
+		pks := allPrivKeyByStage(stage)
+		for _, k := range pks {
+			keys = append(keys, k.PrivKey)
+		}
+		//遍历区块中的所有交易,找到指定交易
+		for i, tx := range blockchain[txnSelector.BlockNumber].Txns {
+			var txn IndexedTransaction
+			json.Unmarshal([]byte(tx), &txn)
+			if txn.Index == txnSelector.Index {
+				tx, _ := json.Marshal(&txn.Txn)
+				rch := utiles.ReqChameleonHash{
+					PubKeys: keys,
+					RawMsg:  string(tx),
+				}
+				result, err := utiles.UpdateChameleonHash(rch)
+				if err != nil {
+					return err
+				}
+				txn.Txn = Transaction{R: result}
+				blockchain[txnSelector.BlockNumber].Txns[i] = txn.String()
+				return nil
+			}
+		}
+		return fmt.Errorf("Not Found Required Txn")
+	}
+
+	if err := reqHash(); err != nil {
+		done <- err
+		return
+	}
+	done <- nil
+	return
 }

@@ -133,7 +133,32 @@ func handlekeypairs(w http.ResponseWriter, r *http.Request) {
 	w.Write(bs)
 }
 func handleDelTxn(w http.ResponseWriter, r *http.Request) {
-	delTxnProposal()
+	var txnSelector TxnSelector
+	decoder := json.NewDecoder(r.Body)
+	defer r.Body.Close()
+	err := decoder.Decode(&txnSelector)
+	if err != nil {
+		w.WriteHeader(http.StatusGone)
+		log.Println("[API] invalid delete transaction data : ", err.Error())
+		w.Write([]byte("invalid delete transaction data. " + err.Error() + "\n"))
+		return
+	}
+	//广播删除交易的提议
+	broadcast(delTxnProposalMsg(txnSelector))
+	//删除交易
+	done := make(chan error)
+	go delTxnProposal(txnSelector, done)
+	//等待交易完成
+	if err := <-done; err != nil {
+		w.WriteHeader(http.StatusGone)
+		log.Println("[API] delete transaction fail : ", err.Error())
+		w.Write([]byte("delete transaction fail. " + err.Error() + "\n"))
+		return
+	}
+	block := getBlock(txnSelector.BlockNumber)
+	b, _ := json.MarshalIndent(block, "", "    ")
+	w.Write([]byte("delete transaction success: " + string(b)))
+	broadcast(updatedBlockMsg(*block))
 }
 
 func handleAddPeer(w http.ResponseWriter, r *http.Request) {
@@ -215,12 +240,64 @@ func wsHandleP2P(ws *websocket.Conn) {
 			err = json.Unmarshal([]byte(v.Data), &pk)
 			errFatal("invalid pubkey msg", err)
 			for _, pubkey := range pk {
-				saveKeyPair(&pubkey)
+				updateKeyPair(&pubkey)
 			}
+		case "delTxnProposal":
+			var selector TxnSelector
+			var keyPairInfo KeyPairInfo
+			err = json.Unmarshal([]byte(v.Data), &selector)
+			errFatal("invalid del Txn Proposal msg", err)
+
+			//找到需要的私钥
+			for _, value := range keypairinfos {
+				if selector.BlockNumber/cycle == value.Stage && *nodeName == value.NodeName {
+					keyPairInfo = value
+					break
+				}
+			}
+			//回复私钥
+			v.Type = "delTxnVote"
+			data, _ := json.Marshal(keyPairInfo)
+			v.Data = string(data)
+			bs, _ := json.Marshal(v)
+			bsStr := utiles.Indent(bs)
+			log.Printf("Response delTxnVote Data: %s\n", bsStr)
+			ws.Write(bs)
+
+		case "delTxnVote":
+			var keyPairInfo KeyPairInfo
+			err = json.Unmarshal([]byte(v.Data), &keyPairInfo)
+			errFatal("invalid del Txn Vote msg", err)
+			//保存私钥
+			saveKeyPair(&keyPairInfo)
+
+		case "updateBlock":
+			var block Block
+			err = json.Unmarshal([]byte(v.Data), &block)
+			errFatal("invalid updated block", err)
+			updateBlock(block)
 		}
 	}
 }
-
+func getBlock(blocknumber int) (block *Block) {
+	if blocknumber >= 0 && blocknumber < len(blockchain) {
+		return blockchain[blocknumber]
+	}
+	return &Block{}
+}
+func updateBlock(block Block) error {
+	if block.BlockNumber == 0 || block.BlockNumber >= int64(len(blockchain)) {
+		return fmt.Errorf("block.BlockNumber Is Invalid:%v", block.BlockNumber)
+	}
+	if block.PreviousHash != blockchain[block.BlockNumber-1].Hash {
+		return fmt.Errorf("block.PreviousHash Is Not Equal prev.Hash:%v preHash:%v", block.PreviousHash, blockchain[block.BlockNumber-1].Hash)
+	}
+	if block.Hash != blockchain[block.BlockNumber+1].PreviousHash {
+		return fmt.Errorf("block.Hash Is Not Equal Next.prevHash:%v next.prevHash:%v", block.Hash, blockchain[block.BlockNumber+1].PreviousHash)
+	}
+	blockchain[block.BlockNumber] = &block
+	return nil
+}
 func getLatestBlock() (block *Block) { return blockchain[len(blockchain)-1] }
 func responseLatestMsg() (bs []byte) {
 	var v = &ResponseBlockchain{Type: "responseBlockchain"}
@@ -249,7 +326,20 @@ func pubKeyMsg(pk []KeyPairInfo) (bs []byte) {
 	bs, _ = json.Marshal(v)
 	return
 }
-func delTxnProposal() []byte { return []byte(fmt.Sprintf("{\"type\": %s}", "\"delTxnProposal\"")) }
+func delTxnProposalMsg(selector TxnSelector) (bs []byte) {
+	var v = &ResponseBlockchain{Type: "delTxnProposal"}
+	sel, _ := json.Marshal(selector)
+	v.Data = string(sel)
+	bs, _ = json.Marshal(v)
+	return bs
+}
+func updatedBlockMsg(block Block) (bs []byte) {
+	var v = &ResponseBlockchain{Type: "updateBlock"}
+	sel, _ := json.Marshal(block)
+	v.Data = string(sel)
+	bs, _ = json.Marshal(v)
+	return bs
+}
 func queryLatestMsg() []byte { return []byte(fmt.Sprintf("{\"type\": %s}", "\"queryLatest\"")) }
 func queryAllMsg() []byte    { return []byte(fmt.Sprintf("{\"type\": %s}", "\"queryAll\"")) }
 func calculateHashForBlock(b *Block) string {
@@ -339,11 +429,11 @@ func deleteMinedTxn(minedblocks []*Block) {
 		//遍历区块中的交易
 		for _, tx := range block.Txns {
 			//解析交易
-			var txn Transaction
+			var txn IndexedTransaction
 			json.Unmarshal([]byte(tx), &txn)
 			//查找交易是否在交易池中
 			for n, tx := range txnPool {
-				if result, err := txn.Equals(*tx); err == nil {
+				if result, err := txn.Txn.Equals(*tx); err == nil {
 					if result == true {
 						txnPool = append(txnPool[0:n], txnPool[n+1:]...)
 						log.Printf("Sync To Delete Mined Transaction In TxnPool Of Block %d.", b)
@@ -384,12 +474,12 @@ func handleBlockchainResponse(msg []byte) {
 }
 
 // 每隔60个块为一个阶段，每隔阶段使用不同的秘钥对，当还剩20块的时间时，更新下一个阶段的秘钥
-func updateKeypair() {
+func geneKeypair() {
 	count := 0
 	geneKeyPair := func() {
 		kp, err := utiles.RequestKeyPair()
 		if err != nil {
-			log.Printf("[updateKeypair] fail. stage=%d err=%v", count/cycle, err)
+			log.Printf("[geneKeypair] fail. stage=%d err=%v", count/cycle, err)
 			return
 		}
 		pk := &KeyPairInfo{
@@ -400,7 +490,7 @@ func updateKeypair() {
 			TimeStamp: time.Now().Format("2006-01-02 15:04:05")}
 		saveKeyPair(pk)
 		broadcast(pubKeyMsg(allPubKeyByNode(*nodeName)))
-		log.Printf("[updateKeypair] Gene New keypair = %+v", pk)
+		log.Printf("[geneKeypair] Gene New keypair = %+v", pk)
 		count += cycle
 	}
 	//定时通知出块
@@ -466,7 +556,7 @@ func main() {
 	if *superNode == true {
 		notifyNodeMsg()
 	}
-	go updateKeypair()
+	go geneKeypair()
 
 	http.Handle("/", websocket.Handler(wsHandleP2P))
 	log.Println("Listen P2P on ", *p2pAddr)

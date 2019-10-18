@@ -55,8 +55,8 @@ func RequestChameleonHash(rch ReqChameleonHash) (RespChameleonHash, error) {
 }
 
 //UpdateChameleonHash 申请新的秘钥对
-func UpdateChameleonHash(rch ReqChameleonHash) (RespChameleonHash, error) {
-	var result RespChameleonHash
+func UpdateChameleonHash(rch ReqChameleonHash) (string, error) {
+	var result string
 	senddata, _ := json.Marshal(&rch)
 	_, _, errs := gorequest.New().Post(url + "update_chameleonhash").
 		Send(senddata).
@@ -64,7 +64,7 @@ func UpdateChameleonHash(rch ReqChameleonHash) (RespChameleonHash, error) {
 	if errs != nil {
 		//err := fmt.Errorf("requestKeyPair %s error: %q", url, errs)
 		//return KeyPair{}, err
-		return RespChameleonHash{CHash: "816534932c2b7154836da6afc367695e6337db8a921823784c14378abed4f7d7", R: "84cdecc9c273927ff6d9cca1ae75945990a2cb1f81e5daab52a987f6d788c372"}, nil
+		return "94cdecc9c273927ff6d9cca1ae75945990a2cb1f81e5daab52a987f6d788c372", nil
 	}
 	return result, nil
 }
