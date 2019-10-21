@@ -46,6 +46,30 @@ type KeyPairInfo struct {
 	TimeStamp string `json:"timeStamp"`
 }
 
+//KeyPairInfoForTest 公钥存储结构
+type KeyPairInfoForTest struct {
+	Block     int    `json:"block"`
+	PubKey    string `json:"pubkey"`
+	PrivKey   string `json:"privkey"`
+	TimeStamp string `json:"timeStamp"`
+}
+
+// //KeyPairInfoForTest2 公钥存储结构
+// type KeyPairInfoForTest2 struct {
+// 	PubKey    string `json:"pubkey"`
+// 	PrivKey   string `json:"privkey"`
+// 	TimeStamp string `json:"timeStamp"`
+// }
+
+// //KeyPairInfoForTest3 公钥存储结构
+// type KeyPairInfoForTest3 struct {
+// 	BlockNumber int    `json:"blockNumber"`
+// 	TxnIndex    int    `json:"txnIndex"`
+// 	PubKey      string `json:"pubkey"`
+// 	PrivKey     string `json:"privkey"`
+// 	TimeStamp   string `json:"timeStamp"`
+// }
+
 func errFatal(msg string, err error) {
 	if err != nil {
 		log.Fatalln(msg, err)
@@ -68,12 +92,40 @@ func connectToPeers(peersAddr []string) {
 func initConnection(ws *websocket.Conn) {
 	go wsHandleP2P(ws)
 
-	log.Println("query latest block.")
+	log.Println("Connect Peer OK! Start Query Latest Blocks ...")
 	ws.Write(queryLatestMsg())
 }
 
 func handleBlocks(w http.ResponseWriter, r *http.Request) {
 	bs, _ := json.MarshalIndent(blockchain, "", "    ")
+	w.Write(bs)
+}
+func handleBlock(w http.ResponseWriter, r *http.Request) {
+	var blocknumber int
+	decoder := json.NewDecoder(r.Body)
+	defer r.Body.Close()
+	err := decoder.Decode(&blocknumber)
+	if err != nil {
+		w.WriteHeader(http.StatusGone)
+		log.Println("[API] invalid block data : ", err.Error())
+		w.Write([]byte("invalid block data. " + err.Error() + "\n"))
+		return
+	}
+	if blocknumber >= len(blockchain) {
+		w.Write([]byte("invalid block number: " + strconv.Itoa(blocknumber) + "\n"))
+		return
+	}
+
+	txsize := 0
+	for _, tx := range blockchain[blocknumber].Txns {
+		var txn IndexedTransaction
+		json.Unmarshal([]byte(tx), &txn)
+		txsize += txn.Txn.Size()
+	}
+	w.Write([]byte(fmt.Sprintf("BLock Header     Size: %d\n", blockchain[blocknumber].Size())))
+	w.Write([]byte(fmt.Sprintf("Block Body(Txns) Size: %d\n", txsize)))
+
+	bs, _ := json.MarshalIndent(blockchain[blocknumber], "", "    ")
 	w.Write(bs)
 }
 func handlePendings(w http.ResponseWriter, r *http.Request) {
@@ -96,7 +148,7 @@ func handleSendTransaction(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("invalid transaction data. " + err.Error() + "\n"))
 		return
 	}
-	txn.R = randValue()
+	txn.R = utiles.RandValue()
 	addTransaction(&txn)
 	broadcast(newTransactionMsg(txn))
 }
@@ -129,6 +181,63 @@ func handlePeers(w http.ResponseWriter, r *http.Request) {
 }
 
 func handlekeypairs(w http.ResponseWriter, r *http.Request) {
+	// keypairinfosTest := []KeyPairInfoForTest{}
+	// keypairinfosTest = append(keypairinfosTest, KeyPairInfoForTest{
+	// 	Block:     1,
+	// 	PubKey:    "ff9c1ab709eaff78b7978c4e50a27271d66279a897ed04124c3bea5b74108f78",
+	// 	PrivKey:   "93cb24cc1329b96dd9b5c41f87975ade6f0210927f7d3bff792dc7a4712645ed",
+	// 	TimeStamp: "2019-10-21 11:06:43",
+	// 	Miner:     "node2",
+	// })
+	// keypairinfosTest = append(keypairinfosTest, KeyPairInfoForTest{
+	// 	Block:     2,
+	// 	PubKey:    "afa23dd7cff5f30094e38467f7ec2448ff600cd4bd6c1b812473ab4c81962e56",
+	// 	PrivKey:   "",
+	// 	TimeStamp: "2019-10-21 11:06:53",
+	// 	Miner:     "node3",
+	// })
+	// keypairinfosTest = append(keypairinfosTest, KeyPairInfoForTest{
+	// 	Block:     3,
+	// 	PubKey:    "7d5826e4fabc14a30fc5df1e0e6146682adbefeda62b54f421b0ab5a76c8dff1",
+	// 	PrivKey:   "93cb24cc1329b96dd9b5c41f87975ade6f0210927f7d3bff792dc7a4712645ed",
+	// 	TimeStamp: "2019-10-21 11:07:03",
+	// 	Miner:     "node2",
+	// })
+
+	// bs, _ := json.MarshalIndent(keypairinfosTest, "", "    ")
+
+	// keypairinfosTest2 := []KeyPairInfoForTest2{}
+	// keypairinfosTest2 = append(keypairinfosTest2, KeyPairInfoForTest2{
+	// 	PubKey:    "3ea24c3bea5b7410d1467978c4e5e8a1141e4a8b5e038e78933c4c2cf770759c",
+	// 	PrivKey:   "36dd9ea65cf5d74f5fa6210c2211248693fca4639eb9b30f6157c53cfccdef2f",
+	// 	TimeStamp: "2019-10-21 13:32:28",
+	// })
+	// bs, _ := json.MarshalIndent(keypairinfosTest2, "", "    ")
+
+	// keypairinfosTest3 := []KeyPairInfoForTest3{}
+	// keypairinfosTest3 = append(keypairinfosTest3, KeyPairInfoForTest3{
+	// 	BlockNumber: 1,
+	// 	TxnIndex:    0,
+	// 	PubKey:      "b5e1e41e4a8b60ec9f280b37cbf0c65c2cf7701467978c4e5e8a118e78933c47",
+	// 	PrivKey:     "4a41caff4bb887e351cd8190ed3bfd93049c3daff84f3f18230fc4c140a9e941",
+	// 	TimeStamp:   "2019-10-21 18:52:31",
+	// })
+	// keypairinfosTest3 = append(keypairinfosTest3, KeyPairInfoForTest3{
+	// 	BlockNumber: 1,
+	// 	TxnIndex:    1,
+	// 	PubKey:      "bc1ba5a4a261d56d6d83cc46b23ebdd6172893d8230e2bf58ee08456d8e71596",
+	// 	PrivKey:     "a2f437dd5360a2eb31a6f9d04e7efc9f2bdc3719aa9f93c2bc832bb3287b2ac5",
+	// 	TimeStamp:   "2019-10-21 18:52:31",
+	// })
+	// keypairinfosTest3 = append(keypairinfosTest3, KeyPairInfoForTest3{
+	// 	BlockNumber: 2,
+	// 	TxnIndex:    0,
+	// 	PubKey:      "0cb07b71540967dda75804d18524251c4d2aca29d5afacb9085effac5156d8d5",
+	// 	PrivKey:     "31cf6ac1ab42d70e348806eef8d53699bcda11cf3ed5465f8417ed9562f9cad0",
+	// 	TimeStamp:   "2019-10-21 18:52:41",
+	// })
+	// bs, _ := json.MarshalIndent(keypairinfosTest3, "", "    ")
+
 	bs, _ := json.MarshalIndent(keypairinfos, "", "    ")
 	w.Write(bs)
 }
@@ -548,6 +657,7 @@ func main() {
 	http.HandleFunc("/keypairs", handlekeypairs)
 	http.HandleFunc("/send_transaction", handleSendTransaction)
 	http.HandleFunc("/query_transaction", handleQueryTransaction)
+	http.HandleFunc("/query_block", handleBlock)
 	http.HandleFunc("/add_peer", handleAddPeer)
 	http.HandleFunc("/del_txn", handleDelTxn)
 

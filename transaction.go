@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"math/rand"
 	"time"
 
 	"github.com/cbergoon/merkletree"
@@ -14,11 +13,17 @@ import (
 
 //Transaction 交易
 type Transaction struct {
-	From  string `json:"from"`
-	To    string `json:"to"`
-	Value string `json:"value"`
-	Data  string `json:"data"`
-	R     string `json:"r"`
+	From          string `json:"from"`
+	To            string `json:"to"`
+	Value         string `json:"value"`
+	Data          string `json:"data"`
+	R             string `json:"r"`
+	ChameleonHash string `json:"chameleonHash"`
+}
+
+//Size 计算长度
+func (t *Transaction) Size() int {
+	return len(t.From) + len(t.To) + len(t.Value) + len(t.Data) + len(t.R)
 }
 
 func (t *Transaction) String() string {
@@ -35,6 +40,10 @@ func (t Transaction) CalculateHash() ([]byte, error) {
 	// 	return nil, err
 	// }
 	// return h.Sum(nil), nil
+
+	if t.ChameleonHash != "" {
+		return hex.DecodeString(t.ChameleonHash)
+	}
 	latestBlock := getLatestBlock()
 	//获取最新高度的下一块的stage
 	var keys []string
@@ -51,6 +60,7 @@ func (t Transaction) CalculateHash() ([]byte, error) {
 	if err != nil {
 		return []byte{}, err
 	}
+	t.ChameleonHash = result.CHash
 	return hex.DecodeString(result.CHash)
 }
 
@@ -184,15 +194,7 @@ func allPubKeyByNode(nodeName string) []KeyPairInfo {
 	}
 	return pks
 }
-func randValue() string {
-	var r = make([]byte, 32)
-	rand.Seed(time.Now().UnixNano())
-	n, _ := rand.Read(r)
-	if n == 32 {
-		return hex.EncodeToString(r)
-	}
-	return ""
-}
+
 func getMerkleRoot(all []*Transaction) string {
 	//Build list of Content to build tree
 	var list []merkletree.Content
@@ -209,6 +211,10 @@ func getMerkleRoot(all []*Transaction) string {
 	t, err := merkletree.NewTree(list)
 	if err != nil {
 		log.Fatal(err)
+	}
+	for n, t := range list {
+		hash, _ := t.CalculateHash()
+		all[n].ChameleonHash = hex.EncodeToString(hash)
 	}
 	//Get the Merkle Root of the tree
 	mr := t.MerkleRoot()
@@ -282,10 +288,13 @@ func delTxnProposal(txnSelector TxnSelector, done chan error) {
 			keys = append(keys, k.PrivKey)
 		}
 		//遍历区块中的所有交易,找到指定交易
-		for i, tx := range blockchain[txnSelector.BlockNumber].Txns {
+		for i, txOld := range blockchain[txnSelector.BlockNumber].Txns {
 			var txn IndexedTransaction
-			json.Unmarshal([]byte(tx), &txn)
+			json.Unmarshal([]byte(txOld), &txn)
+
 			if txn.Index == txnSelector.Index {
+
+				//请求计算删除后的交易的r
 				tx, _ := json.Marshal(&txn.Txn)
 				rch := utiles.ReqChameleonHash{
 					PubKeys: keys,
@@ -295,7 +304,8 @@ func delTxnProposal(txnSelector TxnSelector, done chan error) {
 				if err != nil {
 					return err
 				}
-				txn.Txn = Transaction{R: result}
+				//生成新的交易，并替换旧交易
+				txn.Txn = Transaction{R: result, ChameleonHash: txn.Txn.ChameleonHash}
 				blockchain[txnSelector.BlockNumber].Txns[i] = txn.String()
 				return nil
 			}

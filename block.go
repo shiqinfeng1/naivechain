@@ -23,6 +23,11 @@ type Block struct {
 	TxnRoot      string   `json:"txnRoot"`
 }
 
+//Size 计算长度
+func (b *Block) Size() int {
+	return 2 + len(b.PreviousHash) + 2 + len(b.Miner) + len(b.Hash) + len(b.TxnRoot) //+ len(b.Txns)*8
+}
+
 func (b *Block) String() string {
 	return fmt.Sprintf("BlockNumber: %d,PreviousHash:%s,Timestamp:%d,txns:%v Miner:%s,Hash:%s,TxnRoot:%s",
 		b.BlockNumber, b.PreviousHash, b.Timestamp, b.Txns, b.Miner, b.Hash, b.TxnRoot)

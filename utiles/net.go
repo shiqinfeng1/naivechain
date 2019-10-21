@@ -34,7 +34,7 @@ func RequestKeyPair() (KeyPair, error) {
 	if errs != nil {
 		//err := fmt.Errorf("requestKeyPair %s error: %q", url, errs)
 		//return KeyPair{}, err
-		return KeyPair{PrivKey: "a9db12f0905c0160f963dcf4bb1e39383f8693af87b649bcfd6c652b395075ae", PubKey: "7db20e3a7d652bde0b1a1b7486076a2e11f795e99bf7f5fe700fb83f15b19ef2"}, nil
+		return KeyPair{PrivKey: RandValue(), PubKey: RandValue()}, nil
 	}
 	return result, nil
 }
@@ -49,7 +49,7 @@ func RequestChameleonHash(rch ReqChameleonHash) (RespChameleonHash, error) {
 	if errs != nil {
 		//err := fmt.Errorf("requestKeyPair %s error: %q", url, errs)
 		//return KeyPair{}, err
-		return RespChameleonHash{CHash: "816534932c2b7154836da6afc367695e6337db8a921823784c14378abed4f7d7", R: "84cdecc9c273927ff6d9cca1ae75945990a2cb1f81e5daab52a987f6d788c372"}, nil
+		return RespChameleonHash{CHash: RandValue(), R: RandValue()}, nil
 	}
 	return result, nil
 }
@@ -64,7 +64,7 @@ func UpdateChameleonHash(rch ReqChameleonHash) (string, error) {
 	if errs != nil {
 		//err := fmt.Errorf("requestKeyPair %s error: %q", url, errs)
 		//return KeyPair{}, err
-		return "94cdecc9c273927ff6d9cca1ae75945990a2cb1f81e5daab52a987f6d788c372", nil
+		return RandValue(), nil
 	}
 	return result, nil
 }
