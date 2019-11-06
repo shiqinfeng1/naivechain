@@ -545,7 +545,9 @@ func deleteMinedTxn(minedblocks []*Block) {
 			//查找交易是否在交易池中
 			for n, tx := range txnPool {
 				if result, err := txn.Txn.Equals(*tx); err == nil {
-					if result == true {
+					if len(txnPool) == 1 {
+						txnPool = []*Transaction{}
+					} else if result == true {
 						txnPool = append(txnPool[0:n], txnPool[n+1:]...)
 						log.Printf("Sync To Delete Mined Transaction In TxnPool Of Block %d.", b)
 					}

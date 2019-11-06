@@ -11,12 +11,17 @@ import (
 	"github.com/shiqinfeng1/naivechain/utiles"
 )
 
+//RawTransaction 交易
+type RawTransaction struct {
+	From  string `json:"from"`
+	To    string `json:"to"`
+	Value string `json:"value"`
+	Data  string `json:"data"`
+}
+
 //Transaction 交易
 type Transaction struct {
-	From          string `json:"from"`
-	To            string `json:"to"`
-	Value         string `json:"value"`
-	Data          string `json:"data"`
+	RawTransaction
 	R             string `json:"r"`
 	ChameleonHash string `json:"chameleonHash"`
 }
@@ -51,10 +56,11 @@ func (t Transaction) CalculateHash() ([]byte, error) {
 	for _, k := range pks {
 		keys = append(keys, k.PubKey)
 	}
-	tx, _ := json.Marshal(&t)
+	tx, _ := json.Marshal(&RawTransaction{From: t.From, To: t.To, Value: t.Value, Data: t.Data})
 	rch := utiles.ReqChameleonHash{
 		PubKeys: keys,
 		RawMsg:  string(tx),
+		R:       t.R,
 	}
 	result, err := utiles.RequestChameleonHash(rch)
 	if err != nil {
@@ -295,10 +301,11 @@ func delTxnProposal(txnSelector TxnSelector, done chan error) {
 			if txn.Index == txnSelector.Index {
 
 				//请求计算删除后的交易的r
-				tx, _ := json.Marshal(&txn.Txn)
+				tx, _ := json.Marshal(&RawTransaction{From: txn.Txn.From, To: txn.Txn.To, Value: txn.Txn.Value, Data: txn.Txn.Data})
 				rch := utiles.ReqChameleonHash{
 					PubKeys: keys,
 					RawMsg:  string(tx),
+					R:       txn.Txn.R,
 				}
 				result, err := utiles.UpdateChameleonHash(rch)
 				if err != nil {
